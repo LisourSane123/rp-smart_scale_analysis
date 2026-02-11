@@ -74,7 +74,7 @@ echo ""
 # =============================================
 # STEP 2: Install system dependencies
 # =============================================
-echo -e "${YELLOW}=== [1/6] Installing system dependencies ===${NC}"
+echo -e "${YELLOW}=== [1/7] Installing system dependencies ===${NC}"
 apt-get update -qq
 apt-get install -y \
     python3-pip \
@@ -91,7 +91,7 @@ echo -e "${GREEN}System dependencies installed.${NC}"
 # =============================================
 # STEP 3: Create virtual environment
 # =============================================
-echo -e "\n${YELLOW}=== [2/6] Setting up Python virtual environment ===${NC}"
+echo -e "\n${YELLOW}=== [2/7] Setting up Python virtual environment ===${NC}"
 if [ ! -d "$VENV_DIR" ]; then
     sudo -u $PI_USER python3 -m venv $VENV_DIR
     echo -e "${GREEN}Virtual environment created.${NC}"
@@ -102,7 +102,7 @@ fi
 # =============================================
 # STEP 4: Install Python dependencies
 # =============================================
-echo -e "\n${YELLOW}=== [3/6] Installing Python dependencies ===${NC}"
+echo -e "\n${YELLOW}=== [3/7] Installing Python dependencies ===${NC}"
 sudo -u $PI_USER $VENV_DIR/bin/pip install --upgrade pip -q
 sudo -u $PI_USER $VENV_DIR/bin/pip install -r "$PROJ_DIR/requirements.txt" -q
 
@@ -117,7 +117,7 @@ echo -e "${GREEN}Python dependencies installed.${NC}"
 # =============================================
 # STEP 5: Configure scan interval
 # =============================================
-echo -e "\n${YELLOW}=== [4/6] Applying configuration ===${NC}"
+echo -e "\n${YELLOW}=== [4/7] Applying configuration ===${NC}"
 
 # Update SCAN_INTERVAL in config.py
 if [ -f "$CONFIG_FILE" ]; then
@@ -130,11 +130,17 @@ fi
 # =============================================
 # STEP 6: Set permissions
 # =============================================
-echo -e "\n${YELLOW}=== [5/6] Setting permissions ===${NC}"
+echo -e "\n${YELLOW}=== [5/7] Setting permissions ===${NC}"
 
-# Set Bluetooth capabilities
-setcap 'cap_net_raw,cap_net_admin+eip' $VENV_PYTHON
-echo -e "Bluetooth capabilities set for Python."
+# Set Bluetooth capabilities - resolve symlinks to real binary
+REAL_PYTHON=$(readlink -f "$VENV_PYTHON")
+if [ -f "$REAL_PYTHON" ]; then
+    setcap 'cap_net_raw,cap_net_admin+eip' "$REAL_PYTHON"
+    echo -e "Bluetooth capabilities set for Python (${CYAN}${REAL_PYTHON}${NC})."
+else
+    echo -e "${RED}Warning: Could not find Python binary to set Bluetooth capabilities.${NC}"
+    echo -e "You may need to run manually: sudo setcap 'cap_net_raw,cap_net_admin+eip' \$(readlink -f $VENV_PYTHON)"
+fi
 
 # Fix ownership
 chown -R $PI_USER:$PI_USER $PROJ_DIR
@@ -143,7 +149,77 @@ echo -e "File ownership set to ${CYAN}$PI_USER${NC}."
 # =============================================
 # STEP 7: Create and install systemd services
 # =============================================
-echo -e "\n${YELLOW}=== [6/6] Installing systemd services ===${NC}"
+echo -e "\n${YELLOW}=== [6/7] Creating first user profile ===${NC}"
+echo ""
+echo -e "Let's set up your first user profile for the scale."
+echo ""
+
+# Username
+while true; do
+    read -p "Enter username (lowercase, no spaces, e.g. jan): " FIRST_USERNAME
+    if [[ -z "$FIRST_USERNAME" ]]; then
+        echo -e "${RED}Username cannot be empty.${NC}"
+        continue
+    fi
+    if [[ ! "$FIRST_USERNAME" =~ ^[a-z0-9_]+$ ]]; then
+        echo -e "${RED}Username must contain only lowercase letters, numbers and underscores.${NC}"
+        continue
+    fi
+    break
+done
+
+# Display name
+read -p "Enter display name (e.g. Jan Kowalski): " FIRST_DISPLAY_NAME
+FIRST_DISPLAY_NAME=${FIRST_DISPLAY_NAME:-$FIRST_USERNAME}
+
+# Height
+while true; do
+    read -p "Enter height in cm (e.g. 178): " FIRST_HEIGHT
+    if [[ ! "$FIRST_HEIGHT" =~ ^[0-9]+$ ]] || [ "$FIRST_HEIGHT" -lt 50 ] || [ "$FIRST_HEIGHT" -gt 250 ]; then
+        echo -e "${RED}Height must be a number between 50 and 250 cm.${NC}"
+        continue
+    fi
+    break
+done
+
+# Birthdate
+while true; do
+    read -p "Enter birthdate (YYYY-MM-DD, e.g. 1995-03-21): " FIRST_BIRTHDATE
+    if [[ ! "$FIRST_BIRTHDATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+        echo -e "${RED}Birthdate must be in YYYY-MM-DD format.${NC}"
+        continue
+    fi
+    # Basic validation: check if date is parseable
+    if ! date -d "$FIRST_BIRTHDATE" >/dev/null 2>&1; then
+        echo -e "${RED}Invalid date. Please enter a valid date.${NC}"
+        continue
+    fi
+    break
+done
+
+# Sex
+while true; do
+    read -p "Enter sex (male/female): " FIRST_SEX
+    FIRST_SEX=$(echo "$FIRST_SEX" | tr '[:upper:]' '[:lower:]')
+    if [[ "$FIRST_SEX" != "male" && "$FIRST_SEX" != "female" ]]; then
+        echo -e "${RED}Please enter 'male' or 'female'.${NC}"
+        continue
+    fi
+    break
+done
+
+# Create user via manage_users.py
+echo ""
+sudo -u $PI_USER $VENV_PYTHON "$PROJ_DIR/manage_users.py" add "$FIRST_USERNAME" "$FIRST_DISPLAY_NAME" "$FIRST_HEIGHT" "$FIRST_BIRTHDATE" "$FIRST_SEX" && \
+    echo -e "${GREEN}User '$FIRST_USERNAME' created successfully!${NC}" || \
+    echo -e "${YELLOW}Warning: Could not create user. You can add users later with: python3 manage_users.py add${NC}"
+
+echo ""
+
+# =============================================
+# STEP 7: Create and install systemd services
+# =============================================
+echo -e "\n${YELLOW}=== [7/7] Installing systemd services ===${NC}"
 
 # Check prerequisites
 if [ ! -f "$PROJ_DIR/smart_scale/main.py" ]; then
@@ -155,6 +231,9 @@ if [ ! -f "$VENV_PYTHON" ]; then
     echo -e "${RED}Error: Python not found at $VENV_PYTHON${NC}"
     exit 1
 fi
+
+# Resolve python path for service files (avoid symlink issues)
+SERVICE_PYTHON=$(readlink -f "$VENV_PYTHON")
 
 # Create smart_scale measurement service
 cat > $SYSTEMD_DIR/smart_scale.service << EOL
