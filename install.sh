@@ -149,16 +149,53 @@ fi
 
 # Set capabilities on bluepy-helper (the actual binary that does BLE scanning)
 BLUEPY_HELPER=$(find "$VENV_DIR" -name "bluepy-helper" -type f 2>/dev/null | head -1)
+if [ -z "$BLUEPY_HELPER" ] || [ ! -f "$BLUEPY_HELPER" ]; then
+    # bluepy-helper needs to be built first
+    echo -e "Building bluepy-helper..."
+    BLUEPY_DIR=$(find "$VENV_DIR" -path "*/bluepy" -type d 2>/dev/null | head -1)
+    if [ -n "$BLUEPY_DIR" ] && [ -f "$BLUEPY_DIR/Makefile" ]; then
+        (cd "$BLUEPY_DIR" && make -s 2>/dev/null) || true
+    fi
+    BLUEPY_HELPER=$(find "$VENV_DIR" -name "bluepy-helper" -type f 2>/dev/null | head -1)
+fi
+
 if [ -n "$BLUEPY_HELPER" ] && [ -f "$BLUEPY_HELPER" ]; then
     setcap 'cap_net_raw,cap_net_admin+eip' "$BLUEPY_HELPER"
     echo -e "Bluetooth capabilities set for bluepy-helper (${CYAN}${BLUEPY_HELPER}${NC})."
 else
-    echo -e "${YELLOW}Note: bluepy-helper not found yet. Will be available after first run.${NC}"
+    echo -e "${YELLOW}Note: bluepy-helper not found. Will try to set caps after first run.${NC}"
 fi
 
-# Ensure bluetooth service allows LE scanning
+# Create D-Bus policy to allow bluetooth group full BT access
+DBUS_BT_POLICY="/etc/dbus-1/system.d/smart-scale-bluetooth.conf"
+cat > "$DBUS_BT_POLICY" << 'DBUS_EOF'
+<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
+  "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <policy group="bluetooth">
+    <allow send_destination="org.bluez"/>
+    <allow send_interface="org.bluez.Manager"/>
+    <allow send_interface="org.bluez.Adapter1"/>
+    <allow send_interface="org.bluez.GattManager1"/>
+    <allow send_interface="org.freedesktop.DBus.ObjectManager"/>
+    <allow send_interface="org.freedesktop.DBus.Properties"/>
+  </policy>
+</busconfig>
+DBUS_EOF
+chmod 644 "$DBUS_BT_POLICY"
+echo -e "D-Bus Bluetooth policy installed."
+
+# Ensure bluetooth service is enabled and running
+systemctl enable bluetooth.service 2>/dev/null || true
+systemctl restart bluetooth.service 2>/dev/null || true
+
+# Ensure bluetooth adapter is up and LE is enabled
 if command -v hciconfig &>/dev/null; then
     hciconfig hci0 up 2>/dev/null || true
+fi
+if command -v btmgmt &>/dev/null; then
+    btmgmt le on 2>/dev/null || true
+    btmgmt power on 2>/dev/null || true
 fi
 
 # Fix ownership
@@ -269,10 +306,11 @@ WorkingDirectory=$PROJ_DIR
 ExecStart=$VENV_PYTHON -m smart_scale.main
 Restart=always
 RestartSec=10
-StandardOutput=syslog
-StandardError=syslog
+StandardOutput=journal
+StandardError=journal
 SyslogIdentifier=smart_scale
 Environment="PYTHONUNBUFFERED=1"
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
 AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
 
 [Install]
@@ -293,8 +331,8 @@ WorkingDirectory=$PROJ_DIR
 ExecStart=$VENV_PYTHON webapp/app.py
 Restart=always
 RestartSec=10
-StandardOutput=syslog
-StandardError=syslog
+StandardOutput=journal
+StandardError=journal
 SyslogIdentifier=scale_dashboard
 Environment="PYTHONUNBUFFERED=1"
 
