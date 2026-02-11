@@ -132,6 +132,11 @@ fi
 # =============================================
 echo -e "\n${YELLOW}=== [5/7] Setting permissions ===${NC}"
 
+# Add user to bluetooth group
+usermod -aG bluetooth $PI_USER 2>/dev/null && \
+    echo -e "User ${CYAN}$PI_USER${NC} added to bluetooth group." || \
+    echo -e "${YELLOW}Warning: Could not add user to bluetooth group.${NC}"
+
 # Set Bluetooth capabilities - resolve symlinks to real binary
 REAL_PYTHON=$(readlink -f "$VENV_PYTHON")
 if [ -f "$REAL_PYTHON" ]; then
@@ -140,6 +145,20 @@ if [ -f "$REAL_PYTHON" ]; then
 else
     echo -e "${RED}Warning: Could not find Python binary to set Bluetooth capabilities.${NC}"
     echo -e "You may need to run manually: sudo setcap 'cap_net_raw,cap_net_admin+eip' \$(readlink -f $VENV_PYTHON)"
+fi
+
+# Set capabilities on bluepy-helper (the actual binary that does BLE scanning)
+BLUEPY_HELPER=$(find "$VENV_DIR" -name "bluepy-helper" -type f 2>/dev/null | head -1)
+if [ -n "$BLUEPY_HELPER" ] && [ -f "$BLUEPY_HELPER" ]; then
+    setcap 'cap_net_raw,cap_net_admin+eip' "$BLUEPY_HELPER"
+    echo -e "Bluetooth capabilities set for bluepy-helper (${CYAN}${BLUEPY_HELPER}${NC})."
+else
+    echo -e "${YELLOW}Note: bluepy-helper not found yet. Will be available after first run.${NC}"
+fi
+
+# Ensure bluetooth service allows LE scanning
+if command -v hciconfig &>/dev/null; then
+    hciconfig hci0 up 2>/dev/null || true
 fi
 
 # Fix ownership
@@ -245,6 +264,7 @@ Wants=bluetooth.target
 [Service]
 Type=simple
 User=$PI_USER
+Group=bluetooth
 WorkingDirectory=$PROJ_DIR
 ExecStart=$VENV_PYTHON -m smart_scale.main
 Restart=always
@@ -253,6 +273,7 @@ StandardOutput=syslog
 StandardError=syslog
 SyslogIdentifier=smart_scale
 Environment="PYTHONUNBUFFERED=1"
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
 
 [Install]
 WantedBy=multi-user.target
