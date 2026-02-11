@@ -210,6 +210,10 @@ echo ""
 echo -e "Let's set up your first user profile for the scale."
 echo ""
 
+# Reset users.json to empty (remove any hardcoded users from repo)
+echo '{"users": []}' > "$PROJ_DIR/smart_scale/users.json"
+chown $PI_USER:$PI_USER "$PROJ_DIR/smart_scale/users.json"
+
 # Username
 while true; do
     read -p "Enter username (lowercase, no spaces, e.g. jan): " FIRST_USERNAME
@@ -300,18 +304,18 @@ Wants=bluetooth.target
 
 [Service]
 Type=simple
-User=$PI_USER
-Group=bluetooth
+User=root
 WorkingDirectory=$PROJ_DIR
+ExecStartPre=/bin/sleep 2
+ExecStartPre=/usr/bin/hciconfig hci0 up
 ExecStart=$VENV_PYTHON -m smart_scale.main
+UMask=0002
 Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=smart_scale
 Environment="PYTHONUNBUFFERED=1"
-CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
-AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
 
 [Install]
 WantedBy=multi-user.target

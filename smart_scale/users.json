@@ -1,11 +1,3 @@
 {
-  "users": [
-    {
-      "username": "lukasz",
-      "display_name": "Lukasz",
-      "height": 177,
-      "birthdate": "1995-01-15",
-      "sex": "male"
-    }
-  ]
+  "users": []
 }

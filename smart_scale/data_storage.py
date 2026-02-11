@@ -1,5 +1,6 @@
 import pandas as pd
 import os
+import stat
 from datetime import datetime
 
 class DataStorage:
@@ -29,5 +30,11 @@ class DataStorage:
             df.to_csv(self.filename, index=False)
         else:
             df.to_csv(self.filename, mode='a', header=False, index=False)
+
+        # Ensure CSV is readable/writable by all (service runs as root, dashboard as user)
+        try:
+            os.chmod(self.filename, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IWGRP | stat.S_IROTH)
+        except OSError:
+            pass
 
         print(f"Data successfully saved to {self.filename}")
