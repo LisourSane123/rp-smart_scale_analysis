@@ -1,0 +1,9 @@
+# Virtual environment
+.venv/
+
+# Python cache
+smart_scale/__pycache__/
+__pycache__/
+
+# Data files
+*.csv

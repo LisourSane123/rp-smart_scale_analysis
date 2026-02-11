@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Scale Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.29.1.min.js"></script>
+    <style>
+        body { background-color: #f8f9fa; }
+        .card { margin-bottom: 1.5rem; }
+        .metric-value { font-size: 2rem; font-weight: bold; }
+        .metric-label { font-size: 0.9rem; color: #6c757d; }
+        #prediction-chart { height: 450px; width: 100%; }
+        .prediction-controls { margin-bottom: 15px; }
+        .nav-pills .nav-link.active {
+            background-color: #0d6efd;
+            color: white;
+        }
+        .nav-pills .nav-link {
+            color: #0d6efd;
+        }
+    </style>
+</head>
+<body>
+    <div class="container mt-4">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1 class="h2">Smart Scale Dashboard</h1>
+            <form class="d-flex" method="get" action="/">
+                <div class="me-2">
+                    <input type="date" name="start_date" class="form-control" value="{{ start_date }}" placeholder="Start date">
+                </div>
+                <div class="me-2">
+                    <input type="date" name="end_date" class="form-control" value="{{ end_date }}" placeholder="End date">
+                </div>
+                <div class="me-2">
+                    <select name="user" class="form-select" aria-label="Wybierz użytkownika">
+                        {% for user in all_users %}
+                            <option value="{{ user }}" {% if selected_user == user %}selected{% endif %}>{{ user }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <button class="btn btn-outline-secondary me-2" type="submit">Filtruj</button>
+                {% if not error %}
+                    <a href="/download" class="btn btn-primary">Pobierz CSV</a>
+                {% endif %}
+            </form>
+        </div>
+        
+        <!-- Navigation Pills -->
+        <ul class="nav nav-pills mb-4">
+            <li class="nav-item">
+                <a class="nav-link active" href="/">Dashboard</a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="/page2">Page 2</a>
+            </li>
+        </ul>
+
+        {% if error %}
+            <div class="alert alert-warning">{{ error }}</div>
+        {% else %}
+            <!-- Section with last measurement and statistics -->
+            <div class="row">
+                <div class="col-lg-8">
+                    <div class="card">
+                        <div class="card-header">Ostatni pomiar</div>
+                        <div class="card-body">
+                            <div class="row text-center">
+                                <div class="col"><div class="metric-value">{{ last.weight }}</div><div class="metric-label">Waga (kg)</div></div>
+                                <div class="col"><div class="metric-value">{{ last.fat_percentage }}</div><div class="metric-label">Tłuszcz (%)</div></div>
+                                <div class="col"><div class="metric-value">{{ last.muscle_mass }}</div><div class="metric-label">Mięśnie (kg)</div></div>
+                                <div class="col"><div class="metric-value">{{ last.water_percentage }}</div><div class="metric-label">Woda (%)</div></div>
+                                <div class="col"><div class="metric-value">{{ last.bmi }}</div><div class="metric-label">BMI</div></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-4">
+                    <div class="card">
+                        <div class="card-header">Statystyki dla wybranego okresu</div>
+                        <div class="card-body">
+                            <p class="small text-muted mb-2">Dane dla użytkownika: <strong>{{ selected_user }}</strong><br>
+                            Okres: <strong>{{ start_date }}</strong> - <strong>{{ end_date }}</strong></p>
+                            <ul class="list-group list-group-flush">
+                                <li class="list-group-item d-flex justify-content-between"><span>Liczba pomiarów:</span> <strong>{{ stats.total }}</strong></li>
+                                <li class="list-group-item d-flex justify-content-between"><span>Średnia waga:</span> <strong>{{ stats.avg_weight }} kg</strong></li>
+                                <li class="list-group-item d-flex justify-content-between"><span>Min waga:</span> <strong>{{ stats.min_weight }} kg</strong></li>
+                                <li class="list-group-item d-flex justify-content-between"><span>Max waga:</span> <strong>{{ stats.max_weight }} kg</strong></li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Section with weight prediction -->
+            <div class="row">
+                <div class="col-12">
+                    <div class="card">
+                        <div class="card-header">Weight Prediction</div>
+                        <div class="card-body">
+                            <div class="prediction-controls d-flex flex-wrap align-items-center">
+                                <div class="me-2 mb-2">
+                                    <label for="prediction-method" class="form-label">Prediction Model:</label>
+                                    <select id="prediction-method" class="form-select">
+                                        <option value="linear">Linear Regression</option>
+                                        <option value="arima">ARIMA</option>
+                                        <option value="prophet">Prophet</option>
+                                        <option value="comparison">Compare All Models</option>
+                                    </select>
+                                </div>
+                                <div class="me-2 mb-2">
+                                    <label for="prediction-days" class="form-label">Timeframe:</label>
+                                    <select id="prediction-days" class="form-select">
+                                        <option value="7">1 Week</option>
+                                        <option value="30" selected>1 Month</option>
+                                        <option value="90">3 Months</option>
+                                        <option value="180">6 Months</option>
+                                        <option value="365">1 Year</option>
+                                    </select>
+                                </div>
+                                <div class="mb-2 align-self-end">
+                                    <button id="update-prediction" class="btn btn-primary">Update Prediction</button>
+                                </div>
+                            </div>
+                            <div id="prediction-chart"></div>
+                            <div id="prediction-loading" class="text-center my-4" style="display: none;">
+                                <div class="spinner-border text-primary" role="status">
+                                    <span class="visually-hidden">Loading...</span>
+                                </div>
+                                <p class="mt-2">Generating prediction...</p>
+                            </div>
+                            <div id="prediction-error" class="alert alert-warning mt-3" style="display: none;"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Section with charts -->
+            <div class="row">
+                <div class="col-lg-6">
+                    <div class="card"><div class="card-body"><canvas id="weightChart" height="250"></canvas></div></div>
+                </div>
+                <div class="col-lg-6">
+                    <div class="card"><div class="card-body"><canvas id="fatChart" height="250"></canvas></div></div>
+                </div>
+                <div class="col-lg-6">
+                    <div class="card"><div class="card-body"><canvas id="muscleChart" height="250"></canvas></div></div>
+                </div>
+                <div class="col-lg-6">
+                    <div class="card"><div class="card-body"><canvas id="waterChart" height="250"></canvas></div></div>
+                </div>
+                <div class="col-12">
+                    <pre id="chart-debug" style="display:none;"></pre>
+                </div>
+            </div>
+
+            <script>
+                function createTimeChart(ctx, label, data, color) {
+                    try {
+                        // Format numeric timestamp to date string for display
+                        function formatDate(timestamp) {
+                            const date = new Date(timestamp);
+                            return date.toLocaleDateString();
+                        }
+                        
+                        new Chart(ctx, {
+                            type: 'line',
+                            data: {
+                                datasets: [{
+                                    label: label,
+                                    data: data,
+                                    borderColor: color,
+                                    backgroundColor: color + '33', // Transparency
+                                    tension: 0.1,
+                                    parsing: { xAxisKey: 'x', yAxisKey: 'y' },
+                                    pointRadius: 3,
+                                    borderWidth: 1.5,
+                                    fill: true
+                                }]
+                            },
+                            options: { 
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                scales: {
+                                    x: {
+                                        type: 'linear',  // Use linear scale for numeric values
+                                        distribution: 'linear', // Makes spacing proportional to time differences
+                                        ticks: {
+                                            callback: function(value) {
+                                                return formatDate(value);
+                                            }
+                                        },
+                                        title: { display: true, text: 'Data' }
+                                    },
+                                    y: { title: { display: true, text: label } }
+                                },
+                                plugins: {
+                                    tooltip: {
+                                        callbacks: {
+                                            title: function(context) {
+                                                return formatDate(context[0].parsed.x);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    } catch (err) {
+                        console.error(`Error creating ${label} chart:`, err);
+                        const debugEl = document.getElementById('chart-debug');
+                        if (debugEl) {
+                            debugEl.style.display = 'block';
+                            debugEl.textContent += `\nError creating ${label} chart: ${err}`;
+                        }
+                    }
+                }
+
+                // Weight prediction functionality
+                document.addEventListener('DOMContentLoaded', function() {
+                    const updateButton = document.getElementById('update-prediction');
+                    const methodSelect = document.getElementById('prediction-method');
+                    const daysSelect = document.getElementById('prediction-days');
+                    const chartDiv = document.getElementById('prediction-chart');
+                    const loadingDiv = document.getElementById('prediction-loading');
+                    const errorDiv = document.getElementById('prediction-error');
+                    
+                    // Function to fetch and display prediction
+                    function updatePrediction() {
+                        const method = methodSelect.value;
+                        const days = daysSelect.value;
+                        const userSelect = document.querySelector('select[name="user"]');
+                        const user = userSelect ? userSelect.value : '';
+                        
+                        if (!user) {
+                            errorDiv.textContent = 'Please select a user first';
+                            errorDiv.style.display = 'block';
+                            return;
+                        }
+                        
+                        // Show loading indicator
+                        loadingDiv.style.display = 'block';
+                        chartDiv.innerHTML = '';
+                        errorDiv.style.display = 'none';
+                        
+                        // Fetch prediction from server
+                        fetch(`/prediction?user=${encodeURIComponent(user)}&method=${method}&days=${days}`)
+                            .then(response => response.json())
+                            .then(data => {
+                                // Hide loading indicator
+                                loadingDiv.style.display = 'none';
+                                
+                                if (data.error) {
+                                    // Show error message
+                                    errorDiv.textContent = data.error;
+                                    errorDiv.style.display = 'block';
+                                } else {
+                                    // Render chart with Plotly
+                                    const graphData = JSON.parse(data.graphJSON);
+                                    Plotly.newPlot(chartDiv, graphData.data, graphData.layout, {responsive: true});
+                                }
+                            })
+                            .catch(error => {
+                                loadingDiv.style.display = 'none';
+                                errorDiv.textContent = `Error: ${error.message}`;
+                                errorDiv.style.display = 'block';
+                                console.error('Prediction error:', error);
+                            });
+                    }
+                    
+                    // Set up event listeners
+                    updateButton.addEventListener('click', updatePrediction);
+                    
+                    // Load initial prediction if user is selected
+                    const userSelect = document.querySelector('select[name="user"]');
+                    if (userSelect && userSelect.value) {
+                        // Wait a bit for the page to load completely
+                        setTimeout(updatePrediction, 1000);
+                    }
+                });
+
+                createTimeChart(document.getElementById('weightChart'), 'Waga (kg)', {{ chart_data.weight | tojson | safe }}, 'rgba(54, 162, 235, 1)');
+                createTimeChart(document.getElementById('fatChart'), 'Tłuszcz (%)', {{ chart_data.fat_percentage | tojson | safe }}, 'rgba(255, 99, 132, 1)');
+                createTimeChart(document.getElementById('muscleChart'), 'Mięśnie (kg)', {{ chart_data.muscle_mass | tojson | safe }}, 'rgba(75, 192, 192, 1)');
+                createTimeChart(document.getElementById('waterChart'), 'Woda (%)', {{ chart_data.water_percentage | tojson | safe }}, 'rgba(153, 102, 255, 1)');
+            </script>
+        {% endif %}
+    </div>
+</body>
+</html>
