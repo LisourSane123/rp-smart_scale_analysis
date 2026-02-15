@@ -48,9 +48,8 @@ class WeightPredictor:
         try:
             df = pd.read_csv(self.csv_file)
             # Check if required columns exist
-            required_columns = ['weight', 'timestamp', 'user', 'fat_percentage', 'water_percentage', 'muscle_mass', 'bone_mass', 'visceral_fat']
-            if not all(col in df.columns for col in required_columns):
-                logging.error(f"CSV file missing required columns. Required: {required_columns}")
+            if 'weight' not in df.columns or 'timestamp' not in df.columns or 'USER_NAME' not in df.columns:
+                logging.error("CSV file missing required columns (weight, timestamp, USER_NAME)")
                 return
                 
             # Convert timestamp to datetime
@@ -62,14 +61,11 @@ class WeightPredictor:
             # Sort by timestamp
             df = df.sort_index()
             
-            # Keep only required columns
-            df = df[required_columns]
-            
             self.data = df
             
             # Split data by user
-            for user in df['user'].unique():
-                self.user_data[user] = df[df['user'] == user].copy()
+            for user in df['USER_NAME'].unique():
+                self.user_data[user] = df[df['USER_NAME'] == user].copy()
                 
             logging.info(f"Data loaded successfully. Found {len(df)} measurements for {len(self.user_data)} users.")
         except Exception as e:
