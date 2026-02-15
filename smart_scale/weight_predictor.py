@@ -188,10 +188,21 @@ class WeightPredictor:
             
         try:
             # Get weight series
-            series = user_df['weight']
+            series = user_df['weight'].copy()
+            
+            # Calculate time intervals between observations (in days)
+            time_diffs = user_df.index.to_series().diff().dt.total_seconds() / 86400
+            time_diffs.iloc[0] = time_diffs.iloc[1] if len(time_diffs) > 1 else 1
+            
+            # Normalize time weights (0 to 1 range)
+            time_weights = time_diffs / time_diffs.max()
+            time_weights = np.maximum(time_weights, 0.1)
+            
+            # Apply time weights to series
+            weighted_series = series * time_weights
             
             # Check if differencing is needed (stationarity test)
-            adf_result = adfuller(series)
+            adf_result = adfuller(weighted_series)
             p_value = adf_result[1]
             
             # Set ARIMA parameters based on stationarity
@@ -201,7 +212,7 @@ class WeightPredictor:
                 order = (2, 1, 2)
                 
             # Fit ARIMA model
-            model = ARIMA(series, order=order)
+            model = ARIMA(weighted_series, order=order)
             model_fit = model.fit()
             
             # Make predictions
@@ -254,10 +265,21 @@ class WeightPredictor:
             return None
             
         try:
+            # Calculate time intervals between observations (in days)
+            time_diffs = user_df.index.to_series().diff().dt.total_seconds() / 86400
+            time_diffs.iloc[0] = time_diffs.iloc[1] if len(time_diffs) > 1 else 1
+            
+            # Normalize time weights (0 to 1 range) - longer intervals get higher weights
+            time_weights = time_diffs / time_diffs.max()
+            time_weights = np.maximum(time_weights, 0.1)  # Ensure minimum weight of 0.1
+            
+            # Apply time weights to weight values
+            weighted_values = user_df['weight'].values * time_weights.values
+            
             # Prepare data for Prophet
             prophet_df = pd.DataFrame({
                 'ds': user_df.index,
-                'y': user_df['weight'].values
+                'y': weighted_values
             })
             
             # Fit Prophet model with weekly seasonality if enough data
