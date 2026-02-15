@@ -94,7 +94,7 @@ class WeightPredictor:
     
     def predict_linear_regression(self, username, days_ahead):
         """
-        Predict future weight using simple linear regression.
+        Predict future weight using simple linear regression with time-weighted observations.
         
         Args:
             username (str): Username to predict for
@@ -114,9 +114,17 @@ class WeightPredictor:
             X = np.array(range(len(user_df))).reshape(-1, 1)
             y = user_df['weight'].values
             
-            # Fit linear regression model
+            # Calculate time weights based on intervals between observations
+            time_diffs = user_df.index.to_series().diff().dt.total_seconds() / 86400  # Convert to days
+            time_diffs.iloc[0] = time_diffs.iloc[1] if len(time_diffs) > 1 else 1  # Handle first value
+            
+            # Normalize weights (0 to 1 range)
+            weights = time_diffs / time_diffs.max()
+            weights = np.maximum(weights, 0.1)  # Ensure minimum weight of 0.1
+            
+            # Fit weighted linear regression model
             model = LinearRegression()
-            model.fit(X, y)
+            model.fit(X, y, sample_weight=weights)
             
             # Create prediction dates
             last_date = user_df.index.max()
@@ -128,16 +136,12 @@ class WeightPredictor:
             # Make predictions
             y_pred = model.predict(X_pred)
             
-            # Calculate prediction intervals (95% confidence)
-            # Formula based on standard error of the regression
-            y_mean = np.mean(y)
-            n = len(y)
-            
-            # Sum of squared errors
-            sse = np.sum((y - model.predict(X)) ** 2)
+            # Calculate weighted prediction intervals (95% confidence)
+            weighted_residuals = (y - model.predict(X)) * np.sqrt(weights)
+            sse = np.sum(weighted_residuals ** 2)
             
             # Standard error of the regression
-            se = np.sqrt(sse / (n - 2))
+            se = np.sqrt(sse / (len(y) - 2))
             
             # Calculate confidence intervals
             t_value = 1.96  # Approximate t-value for 95% confidence
