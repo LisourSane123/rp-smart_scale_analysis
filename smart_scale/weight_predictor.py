@@ -51,6 +51,8 @@ class WeightPredictor:
             if 'weight' not in df.columns or 'timestamp' not in df.columns or 'USER_NAME' not in df.columns:
                 logging.error("CSV file missing required columns (weight, timestamp, USER_NAME)")
                 return
+            
+            df = df[['weight', 'lbm', 'fat_percentage', 'water_percentage', 'muscle_mass', 'bone_mass', 'visceral_fat', 'bmr', 'timestamp', 'USER_NAME']]
                 
             # Convert timestamp to datetime
             df['timestamp'] = pd.to_datetime(df['timestamp'])
@@ -171,9 +173,9 @@ class WeightPredictor:
     
     def predict_arima(self, username, days_ahead):
         """
-        Predict future weight using ARIMA model on original (unmodified) weight values.
-        The series is resampled to daily frequency and ARIMA is fitted directly
-        on real weight values so that forecasts are on the correct scale.
+        Predict future weight using ARIMA model on daily weighted averages.
+        Each day's weight is calculated as a weighted average, where weights
+        are based on time intervals between consecutive measurements.
         
         Args:
             username (str): Username to predict for
@@ -189,18 +191,38 @@ class WeightPredictor:
             return None
             
         try:
-            # Get weight series (original, unmodified values)
-            series = user_df['weight'].copy()
+            # Calculate time intervals between consecutive measurements (in hours)
+            time_diffs = user_df.index.to_series().diff().dt.total_seconds() / 3600
+            time_diffs.iloc[0] = time_diffs.iloc[1] if len(time_diffs) > 1 else 1
             
-            # Resample to regular daily frequency using interpolation
-            # This helps ARIMA work better with irregular time series
-            daily_series = series.resample('D').mean().interpolate(method='linear')
+            # Normalize weights: longer intervals get higher weights
+            time_weights = time_diffs / time_diffs.max()
+            time_weights = np.maximum(time_weights, 0.05)  # Minimum weight for measurements close together
             
-            # Drop any remaining NaN values
-            daily_series = daily_series.dropna()
+            # Create dataframe with weights
+            weighted_df = user_df[['weight']].copy()
+            weighted_df['weight_factor'] = time_weights.values
+            
+            # Group by date and calculate weighted average for each day
+            weighted_df['date'] = weighted_df.index.date
+            
+            daily_weights = []
+            daily_dates = []
+            
+            for date, group in weighted_df.groupby('date'):
+                # Calculate weighted average for the day
+                weights = group['weight_factor'].values
+                values = group['weight'].values
+                weighted_avg = np.average(values, weights=weights)
+                
+                daily_weights.append(weighted_avg)
+                daily_dates.append(pd.Timestamp(date))
+            
+            # Create daily series
+            daily_series = pd.Series(daily_weights, index=daily_dates)
             
             if len(daily_series) < 10:
-                logging.warning(f"Not enough daily data points for user {username} after resampling")
+                logging.warning(f"Not enough daily data points for user {username}")
                 return None
             
             # Check if differencing is needed (stationarity test)
@@ -213,7 +235,7 @@ class WeightPredictor:
             else:  # Non-stationary series
                 order = (2, 1, 2)
             
-            # Fit ARIMA model directly on original weight values
+            # Fit ARIMA model
             try:
                 model = ARIMA(daily_series, order=order)
                 model_fit = model.fit()
@@ -223,7 +245,7 @@ class WeightPredictor:
                 model = ARIMA(daily_series, order=order)
                 model_fit = model.fit()
             
-            # Make forecast on original scale
+            # Make forecast
             forecast = model_fit.get_forecast(steps=days_ahead)
             mean_values = forecast.predicted_mean.values
             conf_int = forecast.conf_int(alpha=0.05)
@@ -251,7 +273,7 @@ class WeightPredictor:
             return {
                 'method': 'arima',
                 'predictions': pred_df,
-                'last_value': series.iloc[-1],
+                'last_value': user_df['weight'].iloc[-1],
                 'last_date': last_date
             }
             
@@ -281,21 +303,10 @@ class WeightPredictor:
             return None
             
         try:
-            # Calculate time intervals between observations (in days)
-            time_diffs = user_df.index.to_series().diff().dt.total_seconds() / 86400
-            time_diffs.iloc[0] = time_diffs.iloc[1] if len(time_diffs) > 1 else 1
-            
-            # Normalize time weights (0 to 1 range) - longer intervals get higher weights
-            time_weights = time_diffs / time_diffs.max()
-            time_weights = np.maximum(time_weights, 0.1)  # Ensure minimum weight of 0.1
-            
-            # Apply time weights to weight values
-            weighted_values = user_df['weight'].values * time_weights.values
-            
-            # Prepare data for Prophet
+            # Prepare data for Prophet with original weight values
             prophet_df = pd.DataFrame({
                 'ds': user_df.index,
-                'y': weighted_values
+                'y': user_df['weight'].values
             })
             
             # Fit Prophet model with weekly seasonality if enough data
