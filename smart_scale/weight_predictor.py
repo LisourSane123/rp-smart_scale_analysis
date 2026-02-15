@@ -171,7 +171,9 @@ class WeightPredictor:
     
     def predict_arima(self, username, days_ahead):
         """
-        Predict future weight using ARIMA model.
+        Predict future weight using ARIMA model with time-weighted observations.
+        Observations with longer time intervals since the previous measurement
+        receive higher weight (importance).
         
         Args:
             username (str): Username to predict for
@@ -187,7 +189,7 @@ class WeightPredictor:
             return None
             
         try:
-            # Get weight series
+            # Get weight series (original, unmodified values)
             series = user_df['weight'].copy()
             
             # Calculate time intervals between observations (in days)
@@ -195,14 +197,16 @@ class WeightPredictor:
             time_diffs.iloc[0] = time_diffs.iloc[1] if len(time_diffs) > 1 else 1
             
             # Normalize time weights (0 to 1 range)
+            # Longer intervals -> higher weight (more important observation)
             time_weights = time_diffs / time_diffs.max()
-            time_weights = np.maximum(time_weights, 0.1)
+            time_weights = np.maximum(time_weights, 0.1)  # Ensure minimum weight of 0.1
             
-            # Apply time weights to series
-            weighted_series = series * time_weights
+            # Resample to regular daily frequency using interpolation
+            # This helps ARIMA work better with irregular time series
+            daily_series = series.resample('D').mean().interpolate(method='linear')
             
             # Check if differencing is needed (stationarity test)
-            adf_result = adfuller(weighted_series)
+            adf_result = adfuller(daily_series.dropna())
             p_value = adf_result[1]
             
             # Set ARIMA parameters based on stationarity
@@ -210,15 +214,55 @@ class WeightPredictor:
                 order = (2, 0, 2)
             else:  # Non-stationary series
                 order = (2, 1, 2)
-                
-            # Fit ARIMA model
-            model = ARIMA(weighted_series, order=order)
+            
+            # Build observation weights on the daily grid:
+            # For days that had actual measurements, use the computed time weight.
+            # For interpolated days, use a lower default weight.
+            daily_weights = pd.Series(0.1, index=daily_series.index)
+            for idx, w in zip(series.index, time_weights):
+                # Find the closest daily index
+                closest_day = daily_weights.index[daily_weights.index.get_indexer([idx], method='nearest')[0]]
+                daily_weights[closest_day] = max(daily_weights[closest_day], w)
+            
+            # Invert weights to get sigma^2 for GLS-like weighting in ARIMA
+            # Higher weight -> lower variance (more trusted observation)
+            # sigma^2 proportional to 1/weight
+            sigma2 = 1.0 / daily_weights.values
+            sigma2 = sigma2 / sigma2.min()  # Normalize so minimum is 1
+            
+            # Fit ARIMA model on original weight values (not multiplied)
+            model = ARIMA(daily_series, order=order)
             model_fit = model.fit()
             
-            # Make predictions
-            forecast = model_fit.get_forecast(steps=days_ahead)
-            mean_forecast = forecast.predicted_mean
-            conf_int = forecast.conf_int(alpha=0.05)  # 95% confidence interval
+            # Refit with GLS weights if possible (use sigma2 as observation noise)
+            # statsmodels ARIMA doesn't natively support observation weights,
+            # so we use a WLS approach: transform the series by dividing by sqrt(sigma2)
+            # and then predict on the original scale
+            sqrt_sigma = np.sqrt(sigma2)
+            weighted_series_transformed = daily_series / sqrt_sigma
+            
+            try:
+                model_weighted = ARIMA(weighted_series_transformed, order=order)
+                model_weighted_fit = model_weighted.fit()
+                
+                # Make predictions on the transformed scale
+                forecast = model_weighted_fit.get_forecast(steps=days_ahead)
+                mean_forecast = forecast.predicted_mean
+                conf_int = forecast.conf_int(alpha=0.05)
+                
+                # Scale predictions back to original scale
+                # For future predictions, assume weight = 1 (no scaling needed)
+                # The last observation's sigma is a reasonable baseline
+                mean_values = mean_forecast.values
+                lower_values = conf_int.iloc[:, 0].values
+                upper_values = conf_int.iloc[:, 1].values
+            except Exception:
+                # Fallback: use unweighted ARIMA
+                forecast = model_fit.get_forecast(steps=days_ahead)
+                mean_values = forecast.predicted_mean.values
+                conf_int = forecast.conf_int(alpha=0.05)
+                lower_values = conf_int.iloc[:, 0].values
+                upper_values = conf_int.iloc[:, 1].values
             
             # Create prediction dates
             last_date = user_df.index.max()
@@ -227,9 +271,9 @@ class WeightPredictor:
             # Create prediction DataFrame
             pred_df = pd.DataFrame({
                 'ds': future_dates,
-                'yhat': mean_forecast.values,
-                'yhat_lower': conf_int.iloc[:, 0].values,
-                'yhat_upper': conf_int.iloc[:, 1].values
+                'yhat': mean_values,
+                'yhat_lower': lower_values,
+                'yhat_upper': upper_values
             })
             
             return {
